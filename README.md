@@ -239,49 +239,6 @@ output "release_status" {
 - Review the chart's documentation for correct value keys
 - The module uses `yamlencode()` to convert the map to YAML format
 
-### Provider Configuration Issues
-
-- Ensure Helm provider is properly configured with Kubernetes access
-- Verify AWS provider is configured if using EKS
-- Check that the Kubernetes cluster is accessible from where Terraform ru
-    replicaCount = local.environment == "production" ? 3 : 1
-    
-    resources = {
-      limits = {
-        cpu    = local.environment == "production" ? "1000m" : "500m"
-        memory = local.environment == "production" ? "1Gi" : "512Mi"
-      }
-      requests = {
-        cpu    = local.environment == "production" ? "500m" : "250m"
-        memory = local.environment == "production" ? "512Mi" : "256Mi"
-      }
-    }
-  }
-}
-
-module "application" {
-  source = "./modules/helm"
-
-  application_name   = "my-app"
-  namespace          = local.environment
-  create_namespace   = true
-  
-  helm_repository    = "https://charts.example.com"
-  helm_chart         = "my-app"
-  helm_chart_version = "2.0.0"
-  
-  helm_chart_values = local.app_config
-- Ensure values file paths are correct
-- Verify YAML syntax in values files
-- Check that templated variables are properly defined
-- Use `set` blocks for simple overrides
-
-### Authentication Issues
-
-- Verify `repository_username` and `repository_password` for private repos
-- Check repository URL is accessible
-- Ensure credentials have necessary permissions
-
 ## Contributing
 
 Contributions are welcome! Please submit pull requests or open issues for bugs and feature requests.
