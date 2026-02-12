@@ -1,155 +1,158 @@
-# Terraform Helm Releases Module
+# Terraform Helm Release Module
 
 This Terraform module simplifies the deployment and management of Helm charts on Kubernetes clusters.
 
 ## Features
 
-- Deploy multiple Helm charts with a single module
-- Support for custom values files and inline values
+- Deploy Helm charts with customizable values
 - Namespace creation and management
-- Configurable release settings (timeout, wait, atomic deployments)
-- Support for private Helm repositories with authentication
-- Dependency management between releases
-- Easy rollback and upgrade capabilities
+- Configurable release settings (timeout, wait, cleanup)
+- Support for upgrade-install mode
+- Optional resource cleanup wait time after destruction
+- YAML-encoded values support
 
 ## Requirements
 
 | Name | Version |
 |------|---------|
 | terraform | >= 1.0 |
-| helm | >= 2.0 |
-| kubernetes | >= 2.0 |
+| aws | ~> 4.0 |
+| helm | ~> 2.0, != 2.6.0 |
+| time | ~> 0.7 |
 
 ## Providers
 
 | Name | Version |
 |------|---------|
-| helm | >= 2.0 |
-| kubernetes | >= 2.0 |
+| helm | ~> 2.0, != 2.6.0 |
+| time | ~> 0.7 |
+| aws | ~> 4.0 |
 
 ## Usage
 
 ### Basic Example
 
 ```hcl
-module "helm_release" {
-  source = "./terraform-helm-releases"
+module "nginx_ingress" {
+  source = "./modules/helm"
 
-  releases = [
-    {
-      name             = "nginx-ingress"
-      repository       = "https://kubernetes.github.io/ingress-nginx"
-      chart            = "ingress-nginx"
-      namespace        = "ingress-nginx"
-      create_namespace = true
-      version          = "4.8.0"
-      values           = []
-    }
-  ]
+  application_name   = "nginx-ingress"
+  namespace          = "ingress-nginx"
+  create_namespace   = true
+  
+  helm_repository    = "https://kubernetes.github.io/ingress-nginx"
+  helm_chart         = "ingress-nginx"
+  helm_chart_version = "4.8.0"
+  
+  helm_chart_values = {}
 }
 ```
 
-### Advanced Example with Custom Values
+### Example with Custom Values
 
 ```hcl
-module "helm_releases" {
-  source = "./terraform-helm-releases"
+module "prometheus" {
+  source = "./modules/helm"
 
-  releases = [
-    {
-      name             = "prometheus"
-      repository       = "https://prometheus-community.github.io/helm-charts"
-      chart            = "kube-prometheus-stack"
-      namespace        = "monitoring"
-      create_namespace = true
-      version          = "51.0.0"
-      
-      values = [
-        templatefile("${path.module}/values/prometheus-values.yaml", {
-          storage_class = "gp3"
-          retention     = "30d"
-        })
-      ]
-      
-      set = [
-        {
-          name  = "prometheus.prometheusSpec.retention"
-          value = "30d"
-        },
-        {
-          name  = "grafana.adminPassword"
-          value = var.grafana_password
+  application_name   = "prometheus"
+  namespace          = "monitoring"
+  create_namespace   = true
+  
+  helm_repository    = "https://prometheus-community.github.io/helm-charts"
+  helm_chart         = "kube-prometheus-stack"
+  helm_chart_version = "51.0.0"
+  
+  helm_chart_values = {
+    prometheus = {
+      prometheusSpec = {
+        retention            = "30d"
+        storageSpec = {
+          volumeClaimTemplate = {
+            spec = {
+              storageClassName = "gp3"
+              accessModes     = ["ReadWriteOnce"]
+              resources = {
+                requests = {
+                  storage = "50Gi"
+                }
+              }
+            }
+          }
         }
-      ]
-      
-      timeout       = 600
-      wait          = true
-      atomic        = true
-      force_update  = false
-      recreate_pods = false
-    },
-    {
-      name             = "loki"
-      repository       = "https://grafana.github.io/helm-charts"
-      chart            = "loki-stack"
-      namespace        = "monitoring"
-      create_namespace = false
-      version          = "2.9.11"
-      
-      depends_on_releases = ["prometheus"]
-      
-      values = [
-        file("${path.module}/values/loki-values.yaml")
-      ]
+      }
     }
-  ]
+    grafana = {
+      enabled       = true
+      adminPassword = "changeme"
+      persistence = {
+        enabled = true
+        size    = "10Gi"
+      }
+    }
+  }
 }
 ```
 
-### Multiple Releases with Dependencies
+### Example with Advanced Configuration
 
 ```hcl
-module "app_stack" {
-  source = "./terraform-helm-releases"
+module "application" {
+  source = "./modules/helm"
 
-  releases = [
-    {
-      name             = "postgresql"
-      repository       = "https://charts.bitnami.com/bitnami"
-      chart            = "postgresql"
-      namespace        = "database"
-      create_namespace = true
-      version          = "12.11.0"
-      
-      set_sensitive = [
+  application_name   = "my-app"
+  namespace          = "production"
+  create_namespace   = true
+  
+  helm_repository    = "https://charts.example.com"
+  helm_chart         = "my-application"
+  helm_chart_version = "1.2.3"
+  
+  helm_chart_values = {
+    replicaCount = 3
+    
+    image = {
+      repository = "myregistry.azurecr.io/my-app"
+      tag        = "v1.2.3"
+      pullPolicy = "IfNotPresent"
+    }
+    
+    service = {
+      type = "ClusterIP"
+      port = 80
+    }
+    
+    ingress = {
+      enabled = true
+      hosts = [
         {
-          name  = "auth.postgresPassword"
-          value = var.db_password
+          host = "app.example.com"
+          paths = [
+            {
+              path     = "/"
+              pathType = "Prefix"
+            }
+          ]
         }
       ]
-    },
-    {
-      name             = "redis"
-      repository       = "https://charts.bitnami.com/bitnami"
-      chart            = "redis"
-      namespace        = "cache"
-      create_namespace = true
-      version          = "18.1.0"
-    },
-    {
-      name             = "my-application"
-      repository       = "https://my-helm-repo.example.com"
-      chart            = "my-app"
-      namespace        = "apps"
-      create_namespace = true
-      version          = "1.0.0"
-      
-      depends_on_releases = ["postgresql", "redis"]
-      
-      repository_username = var.repo_username
-      repository_password = var.repo_password
     }
-  ]
+    
+    resources = {
+      limits = {
+        cpu    = "500m"
+        memory = "512Mi"
+      }
+      requests = {
+        cpu    = "250m"
+        memory = "256Mi"
+      }
+    }
+  }
+  
+  wait             = true
+  wait_for_jobs    = true
+  timeout          = 600
+  cleanup_on_fail  = true
+  upgrade_install  = true
 }
 ```
 
@@ -157,137 +160,117 @@ module "app_stack" {
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| releases | List of Helm releases to deploy | `list(object)` | `[]` | yes |
-
-### Release Object Structure
-
-Each release in the `releases` list supports the following attributes:
-
-| Name | Description | Type | Default | Required |
-|------|-------------|------|---------|:--------:|
-| name | Name of the Helm release | `string` | n/a | yes |
-| repository | Helm chart repository URL | `string` | n/a | yes |
-| chart | Name of the chart to deploy | `string` | n/a | yes |
-| namespace | Kubernetes namespace for the release | `string` | `"default"` | no |
-| create_namespace | Create namespace if it doesn't exist | `bool` | `false` | no |
-| version | Chart version to deploy | `string` | Latest | no |
-| values | List of values files (as strings) | `list(string)` | `[]` | no |
-| set | List of value blocks with name/value pairs | `list(object)` | `[]` | no |
-| set_sensitive | List of sensitive value blocks | `list(object)` | `[]` | no |
-| timeout | Timeout for Helm operations (seconds) | `number` | `300` | no |
-| wait | Wait until all resources are ready | `bool` | `true` | no |
-| wait_for_jobs | Wait for jobs to complete | `bool` | `false` | no |
-| atomic | Rollback on failure | `bool` | `true` | no |
-| cleanup_on_fail | Delete resources on failed install | `bool` | `false` | no |
-| force_update | Force resource updates | `bool` | `false` | no |
-| recreate_pods | Recreate pods on upgrade | `bool` | `false` | no |
-| max_history | Maximum number of release versions | `number` | `10` | no |
-| skip_crds | Skip CRD installation | `bool` | `false` | no |
-| verify | Enable chart verification | `bool` | `false` | no |
-| dependency_update | Update chart dependencies | `bool` | `false` | no |
-| disable_webhooks | Disable webhooks during operations | `bool` | `false` | no |
-| repository_username | Username for private repository | `string` | `null` | no |
-| repository_password | Password for private repository | `string` | `null` | no |
-| depends_on_releases | List of release names this depends on | `list(string)` | `[]` | no |
+| application_name | The name of the application. Used for labeling Kubernetes resources | `string` | n/a | yes |
+| namespace | The Kubernetes Namespace to deploy the helm chart | `string` | n/a | yes |
+| create_namespace | Whether to create the Kubernetes Namespace if it does not exist | `bool` | `false` | no |
+| helm_repository | The URL of the Helm chart repository | `string` | n/a | yes |
+| helm_chart | The name of the Helm chart to deploy | `string` | n/a | yes |
+| helm_chart_version | The version of the Helm chart to deploy | `string` | n/a | yes |
+| helm_chart_values | A map of values to pass to the Helm chart | `map(any)` | `{}` | no |
+| wait | Wait until all resources are ready | `bool` | varies | no |
+| wait_for_jobs | Wait for jobs to complete | `bool` | varies | no |
+| timeout | Timeout for Helm operations (seconds) | `number` | varies | no |
+| cleanup_on_fail | Delete resources on failed install | `bool` | varies | no |
+| upgrade_install | Enable upgrade-install mode | `bool` | varies | no |
+| sleep_for_resource_culling | Enable wait time after resource destruction | `bool` | varies | no |
+| cleanup_wait_duration | Duration to wait for resource cleanup after destruction | `string` | varies | no |
 
 ## Outputs
 
 | Name | Description |
 |------|-------------|
-| release_names | Map of deployed release names |
-| release_namespaces | Map of release namespaces |
-| release_versions | Map of deployed chart versions |
-| release_statuses | Map of release statuses |
-| release_metadata | Complete metadata for all releases |
+| application_name | The name of the deployed application |
+| helm_chart_name | The name of the deployed Helm chart |
+| helm_chart_version | The version of the deployed Helm chart |
+| namespace | The namespace where the application is deployed |
+| status | The status of the Helm release |
 
-## Examples
+### Using Outputs
 
-### Using External Values Files
-
-Create a values file at `values/nginx-values.yaml`:
-
-```yaml
-controller:
-  replicaCount: 3
-  resources:
-    limits:
-      cpu: 200m
-      memory: 256Mi
-    requests:
-      cpu: 100m
-      memory: 128Mi
-```
-
-Reference it in your Terraform:
+You can reference module outputs in your Terraform configuration:
 
 ```hcl
-module "nginx" {
-  source = "./terraform-helm-releases"
+module "my_app" {
+  source = "./modules/helm"
 
-  releases = [
-    {
-      name             = "nginx"
-      repository       = "https://kubernetes.github.io/ingress-nginx"
-      chart            = "ingress-nginx"
-      namespace        = "ingress"
-      create_namespace = true
-      values = [
-        file("${path.module}/values/nginx-values.yaml")
-      ]
-    }
-  ]
+  application_name   = "my-application"
+  namespace          = "production"
+  create_namespace   = true
+  
+  helm_repository    = "https://charts.example.com"
+  helm_chart         = "my-app"
+  helm_chart_version = "1.0.0"
+  
+  helm_chart_values = {}
+}
+
+# Use the module outputs
+output "deployed_app_name" {
+  value = module.my_app.application_name
+}
+
+output "deployed_chart_version" {
+  value = module.my_app.helm_chart_version
+}
+
+output "deployment_namespace" {
+  value = module.my_app.namespace
+}
+
+output "release_status" {
+  value = module.my_app.status
 }
 ```
-
-### Using Templated Values
-
-```hcl
-module "app" {
-  source = "./terraform-helm-releases"
-
-  releases = [
-    {
-      name             = "my-app"
-      repository       = "https://charts.example.com"
-      chart            = "application"
-      namespace        = "production"
-      create_namespace = true
-      
-      values = [
-        templatefile("${path.module}/values/app-values.yaml.tpl", {
-          environment      = "production"
-          replicas        = 5
-          domain          = "app.example.com"
-          database_host   = module.database.endpoint
-          cache_endpoint  = module.redis.endpoint
-        })
-      ]
-    }
-  ]
-}
-```
-
-## Best Practices
-
-1. **Version Pinning**: Always specify chart versions to ensure reproducible deployments
-2. **Namespace Management**: Use `create_namespace = true` for better resource organization
-3. **Atomic Deployments**: Enable `atomic = true` for automatic rollback on failures
-4. **Dependency Ordering**: Use `depends_on_releases` to ensure correct deployment order
-5. **Sensitive Values**: Use `set_sensitive` for passwords and secrets
-6. **Resource Limits**: Define appropriate timeouts based on chart complexity
-7. **Values Organization**: Keep values files in a dedicated directory structure
 
 ## Troubleshooting
 
 ### Release Failed to Install
 
-- Check the timeout value is sufficient for chart complexity
-- Verify namespace exists or `create_namespace` is enabled
-- Review Helm chart requirements and dependencies
-- Check Kubernetes cluster resources and permissions
+- Ensure `create_namespace = true` if the namespace doesn't exist
+- Verify the Helm chart repository URL is accessible
+- Check the chart name and version are correct
+- Review Kubernetes cluster connection and permissions
+- Increase `timeout` value for complex charts
 
-### Values Not Applied
+### Values Not Applied Correctly
 
+- Verify the structure of `helm_chart_values` matches the chart's expected values
+- Check for YAML/HCL syntax errors in the values map
+- Review the chart's documentation for correct value keys
+- The module uses `yamlencode()` to convert the map to YAML format
+
+### Provider Configuration Issues
+
+- Ensure Helm provider is properly configured with Kubernetes access
+- Verify AWS provider is configured if using EKS
+- Check that the Kubernetes cluster is accessible from where Terraform ru
+    replicaCount = local.environment == "production" ? 3 : 1
+    
+    resources = {
+      limits = {
+        cpu    = local.environment == "production" ? "1000m" : "500m"
+        memory = local.environment == "production" ? "1Gi" : "512Mi"
+      }
+      requests = {
+        cpu    = local.environment == "production" ? "500m" : "250m"
+        memory = local.environment == "production" ? "512Mi" : "256Mi"
+      }
+    }
+  }
+}
+
+module "application" {
+  source = "./modules/helm"
+
+  application_name   = "my-app"
+  namespace          = local.environment
+  create_namespace   = true
+  
+  helm_repository    = "https://charts.example.com"
+  helm_chart         = "my-app"
+  helm_chart_version = "2.0.0"
+  
+  helm_chart_values = local.app_config
 - Ensure values file paths are correct
 - Verify YAML syntax in values files
 - Check that templated variables are properly defined
@@ -303,10 +286,6 @@ module "app" {
 
 Contributions are welcome! Please submit pull requests or open issues for bugs and feature requests.
 
-## License
-
-MIT License - See LICENSE file for details
-
 ## Authors
 
 Created and maintained by your DevOps team.
@@ -316,3 +295,9 @@ Created and maintained by your DevOps team.
 - [Terraform Helm Provider Documentation](https://registry.terraform.io/providers/hashicorp/helm/latest/docs)
 - [Helm Documentation](https://helm.sh/docs/)
 - [Kubernetes Documentation](https://kubernetes.io/docs/)
+
+## Notes
+
+- The `helm_chart_values` variable accepts a map that gets automatically converted to YAML using `yamlencode()`
+- Additional configuration variables (`wait`, `wait_for_jobs`, `timeout`, etc.) may need to be added to [variables.tf](modules/helm/variables.tf) if you want to customize these behaviors
+- Module outputs provide access to deployment metadata including application name, chart version, namespace, and release status
